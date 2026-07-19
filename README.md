@@ -10,10 +10,15 @@ You point it at a 3D model and tell it two things — the **material** and how
    touches the bed, how tall and tippy it is).
 2. **Applies known-good rules** for your material and strength target to choose
    supports, brim, walls, infill, infill pattern, and shells — and explains *why*.
-3. **Slices it with OrcaSlicer** and tells you the real **print time and filament**
+3. Adds **automatic surface polish** — ironing on flat tops, a hidden (back +
+   scarf) seam, Arachne variable-width walls, and clean-releasing supports.
+4. **Slices it with OrcaSlicer** and tells you the real **print time and filament**
    (grams), saving a ready G-code.
-4. Optionally **installs the settings as a preset in Bambu Studio** so you can
+5. Optionally **installs the settings as a preset in Bambu Studio** so you can
    tweak in the GUI.
+
+You can also **calibrate a specific spool** (`bambu-calibrate`) so holes/pegs fit
+and flow is dialed in — those corrections then apply to every future slice.
 
 It's not machine learning or a stress simulation — it's honest geometry
 measurement plus a curated rule set, the same reasoning an experienced printer
@@ -62,6 +67,26 @@ osacompile -o "Optimize for X1C.app" droplet.applescript
 
 Then drag any model file onto its icon, answer the two menus, done.
 
+### Calibrate a spool (optional, for the best quality)
+
+Three quick test prints dial a specific spool in. Each one: slice it, print it,
+measure with calipers, feed the number back. The correction is saved per material
+and applied to every future slice automatically.
+
+```bash
+./bambu-calibrate fit  --material PETG                     # dimensional fit (holes/pegs)
+./bambu-calibrate fit  --material PETG --nominal 6 --measured 5.86
+./bambu-calibrate flow --material PETG                     # extrusion flow (single-wall box)
+./bambu-calibrate flow --material PETG --measured 0.45
+./bambu-calibrate temp --material PETG --low 230 --high 260   # temperature tower
+./bambu-calibrate temp --material PETG --set 245
+./bambu-calibrate show
+```
+
+`fit` fixes holes printing undersized (so parts snap together on the first try),
+`flow` fixes over/under-extrusion, and `temp` finds the cleanest nozzle temp.
+Corrections live in `calibration.json` (kept out of the repo — it's yours).
+
 ### Check the printer from anywhere
 
 ```bash
@@ -86,8 +111,9 @@ and subscribe to that topic in the free [ntfy](https://ntfy.sh) phone app.
 
 | File | What it does |
 |------|--------------|
-| `bambu_optimize.py` | Geometry analysis + rule engine + OrcaSlicer slicing |
-| `materials.py` | Per-material rules (PLA/PETG/ABS/ASA/TPU/CF) |
+| `bambu_optimize.py` | Geometry analysis + rule engine + surface polish + OrcaSlicer slicing |
+| `materials.py` | Per-material rules (PLA/PETG/ABS/ASA/TPU/CF): supports, brim, dims |
+| `bambu_calibrate.py` | Per-spool fit / flow / temperature calibration test prints |
 | `bambu_cloud.py` | Reads the printer's live state via Bambu's cloud MQTT |
 | `bambu_watch.py` | Watches a print and sends a phone notification when it ends |
 

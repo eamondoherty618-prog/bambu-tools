@@ -78,6 +78,7 @@ def analyze(mesh):
     tri_z = mesh.triangles[:, :, 2].min(axis=1)
     on_bed = tri_z < 0.4
     down = (nz < -0.1) & (~on_bed)
+    up_flat = (nz > 0.98) & (tri_z > 0.4)     # horizontal top surfaces (ironing candidates)
     a = lambda m: float(area[m].sum())
     return dict(
         x=ext[0], y=ext[1], z=ext[2],
@@ -90,11 +91,12 @@ def analyze(mesh):
         steep30=a(down & (incl < 30)),
         steep45=a(down & (incl < 45)),
         flat_ceiling=a(down & (incl < 10)),
+        flat_top=a(up_flat),
         worst=float(incl[down].min()) if down.any() else float("nan"),
         tallness=ext[2] / max(min(ext[0], ext[1]), 1e-6),
     )
 
-def decide(g, mat_key, strength, layer_h, infill_override=None):
+def decide(g, mat_key, strength, layer_h, infill_override=None, fast=False):
     m = M.MATERIALS[mat_key]
     t = M.STRENGTH_TRAITS[mat_key]
     s = STRENGTH[strength]
@@ -192,6 +194,36 @@ def decide(g, mat_key, strength, layer_h, infill_override=None):
         why.append('! High strength + TPU is a mismatch: pick a higher durometer (95A+/HF) rather than '
                    'cranking walls and infill.')
 
+    # --- Tier 1: surface finish (automatic) ---
+    ov["wall_generator"] = "arachne"            # variable-width walls: cleaner thin features + text
+    ov["seam_position"] = "back"                # hide the Z-seam at the rear
+    ov["top_surface_pattern"] = "monotonic"     # uniform top sheen
+    if not fast:
+        ov["seam_slope_type"] = "external"      # scarf seam: taper the seam so it disappears
+        if g["flat_top"] > 150:
+            ov.update({"ironing_type": "top", "ironing_spacing": "0.10"})
+            why.append(f'Surface: {g["flat_top"]:.0f} mm2 of flat top -> ironing ON (glassy finish); '
+                       'Arachne walls, seam to the back + scarf, monotonic top.')
+        else:
+            why.append('Surface: Arachne walls, seam to the back + scarf seam, monotonic top.')
+    else:
+        why.append('Surface (fast): Arachne walls, seam to the back, monotonic top (ironing/scarf off).')
+
+    # --- Tier 2: dimensional accuracy ---
+    ov["elefant_foot_compensation"] = f"{M.ELEPHANT_FOOT[mat_key]:.2f}"
+    cal = load_calibration().get(mat_key, {})
+    if "xy_hole_compensation" in cal:
+        ov["xy_hole_compensation"] = f'{cal["xy_hole_compensation"]:.3f}'
+    if "xy_contour_compensation" in cal:
+        ov["xy_contour_compensation"] = f'{cal["xy_contour_compensation"]:.3f}'
+    if cal:
+        bits = [f'{k.split("_")[1]} {cal[k]}' for k in
+                ("xy_hole_compensation", "flow_ratio", "nozzle_temperature") if k in cal]
+        why.append(f'Calibrated for this spool: {", ".join(bits)}.')
+    else:
+        why.append(f'Dimensional: {M.ELEPHANT_FOOT[mat_key]:.2f}mm elephant-foot comp. Run '
+                   f'`bambu-calibrate fit --material {mat_key}` to dial in hole/peg fit for this spool.')
+
     return ov, why, m
 
 STUDIO_USER = os.path.expanduser("~/Library/Application Support/BambuStudio/user")
@@ -266,6 +298,20 @@ def load_defaults():
     except Exception:
         return {}
 
+CALIBRATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")
+
+def load_calibration():
+    try:
+        return json.load(open(CALIBRATION_FILE))
+    except Exception:
+        return {}
+
+def save_calibration(material, **values):
+    d = load_calibration()
+    d.setdefault(material, {}).update(values)
+    json.dump(d, open(CALIBRATION_FILE, "w"), indent=1)
+    return d[material]
+
 def save_defaults(**kw):
     d = load_defaults(); d.update(kw)
     json.dump(d, open(DEFAULTS_FILE, "w"), indent=1)
@@ -323,8 +369,10 @@ def orca_flatten(kind, leaf):
         merged.update({k: v for k, v in d.items() if k != "inherits"})
     return merged
 
-def orca_slice(mesh, ov, mat_key, quality, outdir):
-    """Slice headlessly with OrcaSlicer. Returns {gcode, time, cm3, grams} or None."""
+def orca_slice(mesh, ov, mat_key, quality, outdir, apply_cal=True):
+    """Slice headlessly with OrcaSlicer. Returns {gcode, time, cm3, grams} or None.
+    apply_cal=False skips stored spool calibration (used by the calibration tool
+    itself, which needs a raw baseline)."""
     if not os.path.exists(ORCA):
         return None
     m = mesh.copy()
@@ -339,9 +387,29 @@ def orca_slice(mesh, ov, mat_key, quality, outdir):
     proc.update(ov); proc["name"] = f"auto_{mat_key}"; proc["from"] = "User"
     pfile = os.path.join(outdir, "orca_process.json"); json.dump(proc, open(pfile, "w"))
 
-    fil = f"{ORCA_PROFILES}/filament/{ORCA_FILAMENT[mat_key]}.json"
-    if not os.path.exists(fil):
-        return None
+    # filament: apply any measured spool calibration (flow ratio / temperature)
+    cal = load_calibration().get(mat_key, {}) if apply_cal else {}
+    fil_over = {}
+    if "flow_ratio" in cal:
+        fr = f'{cal["flow_ratio"]:.3f}'; fil_over["filament_flow_ratio"] = [fr, fr]
+    if "nozzle_temperature" in cal:
+        tt = str(int(cal["nozzle_temperature"])); fil_over["nozzle_temperature"] = [tt, tt]
+    stock_fil = f"{ORCA_PROFILES}/filament/{ORCA_FILAMENT[mat_key]}.json"
+    if fil_over:
+        # inherit the stock preset (Orca resolves filament inheritance, and this
+        # keeps per-plate compatibility) and just layer the calibration on top
+        base = json.load(open(stock_fil, encoding="utf-8"))
+        fild = {"type": "filament", "from": "User", "name": f"cal_{mat_key}",
+                "inherits": ORCA_FILAMENT[mat_key]}
+        for k in ("compatible_printers", "compatible_printers_condition", "version"):
+            if base.get(k):
+                fild[k] = base[k]
+        fild.update(fil_over)
+        fil = os.path.join(outdir, "orca_filament.json"); json.dump(fild, open(fil, "w"))
+    else:
+        fil = stock_fil
+        if not os.path.exists(fil):
+            return None
     out = os.path.join(outdir, "orca_out"); os.makedirs(out, exist_ok=True)
     guarded([ORCA, stl, "--load-settings", f"{mfile};{pfile}", "--load-filaments", fil,
              "--slice", "0", "--arrange", "1", "--outputdir", out], 300)
@@ -401,6 +469,8 @@ def main():
                     help="override the strength-derived infill %%")
     ap.add_argument("--no-slice", action="store_true",
                     help="skip auto-slicing with OrcaSlicer (just recommend settings)")
+    ap.add_argument("--fast", action="store_true",
+                    help="skip the time-costly quality extras (ironing, scarf seam)")
     ap.add_argument("--no-install", action="store_true",
                     help="don't install the preset into Bambu Studio")
     ap.add_argument("--open", action="store_true",
@@ -424,7 +494,7 @@ def main():
 
     mesh = load_mesh(args.part)
     g = analyze(mesh)
-    ov, why, mrule = decide(g, mat, strength, float(args.quality), args.infill)
+    ov, why, mrule = decide(g, mat, strength, float(args.quality), args.infill, args.fast)
 
     print(f"\n=== {os.path.basename(args.part)}  |  material: {mat}  |  strength: {strength} ===")
     print(f"  size {g['x']:.1f} x {g['y']:.1f} x {g['z']:.1f} mm | {g['volume']:.1f} cm3 | "

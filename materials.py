@@ -83,6 +83,9 @@ STRENGTH_TRAITS = {
                  note="Very stiff + light but brittle and notch-sensitive. Great for rigidity, poor for impact; fewer walls already carry the load."),
 }
 
+# first-layer squish compensation (elephant's foot), mm, per material
+ELEPHANT_FOOT = {"PLA": 0.15, "PETG": 0.20, "ABS": 0.15, "ASA": 0.15, "TPU": 0.10, "CF": 0.15}
+
 ALIASES = {
     "pla": "PLA", "petg": "PETG", "pet-g": "PETG", "abs": "ABS", "asa": "ASA",
     "tpu": "TPU", "flex": "TPU", "cf": "CF", "carbon": "CF", "pla-cf": "CF",

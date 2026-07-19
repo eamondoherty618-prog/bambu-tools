@@ -1,0 +1,2 @@
+#!/bin/bash
+exec "$HOME/bambu-tools/venv/bin/python" "$HOME/bambu-tools/bambu_calibrate.py" "$@"

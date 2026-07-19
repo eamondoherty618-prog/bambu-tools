@@ -16,3 +16,6 @@ Optimize for X1C.app/
 
 # local publish helper (not part of the tool)
 publish.sh
+
+# per-spool calibration (personal)
+calibration.json

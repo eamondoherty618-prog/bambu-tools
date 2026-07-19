@@ -5,3 +5,4 @@ lxml
 cascadio
 paho-mqtt
 certifi
+manifold3d

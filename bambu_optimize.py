@@ -94,33 +94,46 @@ def analyze(mesh):
         tallness=ext[2] / max(min(ext[0], ext[1]), 1e-6),
     )
 
-def decide(g, mat_key, strength, infill_override=None):
+def decide(g, mat_key, strength, layer_h, infill_override=None):
     m = M.MATERIALS[mat_key]
     t = M.STRENGTH_TRAITS[mat_key]
     s = STRENGTH[strength]
+    sup = m["support"]
     why, ov = [], {}
 
     need = g["steep45"] > 150 or g["flat_ceiling"] > 50
     if need:
         clean_ceilings = g["flat_ceiling"] > 300 or g["flat_ceiling"] > 0.12 * g["surface"]
+        # tree hugs organic/curved parts and clears easily; normal + solid interface
+        # gives flat ceilings a clean face
         stype = "normal(auto)" if clean_ceilings else "tree(auto)"
-        iface = max(m["iface"], 2) if clean_ceilings else m["iface"]
+        style = "snug" if clean_ceilings else "organic"
+        top_z = round(sup["top_gap_layers"] * layer_h, 2)          # clean multiple of layer height
+        iface_top = sup["iface_top"] + (1 if clean_ceilings else 0)  # denser under flat ceilings
         ov.update({
             "enable_support": "1",
             "support_type": stype,
+            "support_style": style,
             "support_threshold_angle": "30",
-            "support_top_z_distance": f'{m["z_gap"]:.2f}',
-            "support_interface_top_layers": str(iface),
-            "support_interface_spacing": f'{m["iface_space"]:.1f}',
+            "support_top_z_distance": f"{top_z:.2f}",
+            "support_bottom_z_distance": f'{sup["bottom_gap"]:.2f}',
+            "support_interface_top_layers": str(iface_top),
+            "support_interface_bottom_layers": str(sup["iface_bottom"]),
+            "support_interface_spacing": f'{sup["iface_spacing"]:.2f}',
+            "support_interface_pattern": "rectilinear",
+            "support_object_xy_distance": f'{sup["xy"]:.2f}',
+            "support_base_pattern": "rectilinear",
         })
         why.append(f'{g["steep45"]:.0f} mm2 of <45 overhang'
                    + (f' incl. {g["flat_ceiling"]:.0f} mm2 of near-flat ceilings' if g["flat_ceiling"] > 50 else '')
-                   + f' -> {stype} supports, threshold 30.')
-        why.append(f'{mat_key}: support Z-gap {m["z_gap"]:.2f} mm, {iface} interface layer(s) @ '
-                   f'{m["iface_space"]:.1f} mm spacing (removal vs. underside quality).')
+                   + f' -> {stype} ({style}) supports, threshold 30.')
+        why.append(f'Clean-release tuning for {mat_key}: {top_z:.2f} mm top gap '
+                   f'({sup["top_gap_layers"]} layer{"s" if sup["top_gap_layers"] > 1 else ""} @ {layer_h:.2f}), '
+                   f'{iface_top} interface layer(s) @ {sup["iface_spacing"]:.2f} mm spacing, '
+                   f'{sup["xy"]:.2f} mm side gap, rectilinear interface -> snaps off, smooth underside.')
         if stype == "tree(auto)":
-            why.append('Tree supports: less material + easier removal on a distributed/curved part; '
-                       'try --orient auto or lay a flat face down to cut them further.')
+            why.append('Organic tree supports: minimal contact + easy peel on a curved/distributed part; '
+                       'try --orient or lay a flat face down to cut them further.')
     else:
         ov["enable_support"] = "0"
         why.append(f'Worst overhang {g["worst"]:.0f} deg from flat, only {g["steep45"]:.0f} mm2 sub-45 '
@@ -411,7 +424,7 @@ def main():
 
     mesh = load_mesh(args.part)
     g = analyze(mesh)
-    ov, why, mrule = decide(g, mat, strength, args.infill)
+    ov, why, mrule = decide(g, mat, strength, float(args.quality), args.infill)
 
     print(f"\n=== {os.path.basename(args.part)}  |  material: {mat}  |  strength: {strength} ===")
     print(f"  size {g['x']:.1f} x {g['y']:.1f} x {g['z']:.1f} mm | {g['volume']:.1f} cm3 | "

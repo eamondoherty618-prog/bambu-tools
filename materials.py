@@ -1,57 +1,73 @@
 """
 Material ruleset for Eamon's Bambu X1C (0.4mm hardened-capable nozzle assumed).
-Tuned for the filament families he actually runs: PLA, PETG, ABS, ASA, TPU, CF blends.
+Tuned for the filament families he actually runs: PLA, PETG, ABS, ASA, TPU, CF.
 
 Each entry carries:
-  preset      : substring to resolve the Bambu system filament preset for the X1C
-  z_gap       : support_top_z_distance (mm) - bigger = easier support removal, worse underside
-  iface       : default support-interface layers (surface quality vs. removal effort)
-  iface_space : support_interface_spacing (mm) - larger = easier peel (esp. PETG/TPU)
-  cooling     : qualitative fan philosophy (drives the caution text; fan lives in filament preset)
+  preset      : substring to resolve the Bambu/Orca filament preset for the X1C
   always_brim : force a brim regardless of geometry (warp-prone materials)
   brim_min    : minimum brim width (mm) when a brim is used
   warp        : warp risk 0-3 (drives draft-shield / brim escalation on tall parts)
   cautions    : material-specific gotchas surfaced in the report
+  support     : the clean-release support recipe (see below)
+
+The `support` recipe is what makes supports snap off cleanly AND leave a decent
+underside. The two forces fight each other: a dense interface + tiny gap gives a
+smooth surface but welds on; a big gap + sparse interface snaps off but looks
+rougher. So per material:
+  top_gap_layers : top Z gap expressed in LAYER HEIGHTS (kept a clean multiple so
+                   the separation layer is consistent). Materials that fuse to
+                   supports (PETG, TPU) get 2 layers; the rest get 1.
+  bottom_gap     : Z gap where a support rests on the model from below (mm)
+  iface_top      : dense interface layers under the overhang (surface vs. removal)
+  iface_bottom   : interface layers where support meets the model below
+  iface_spacing  : gap between interface lines (mm) - smaller = smoother + grippier
+  xy             : horizontal gap between support and model walls (mm)
+PLA releases so easily it can run a near-solid interface (0.20 spacing) for a
+glassy underside and still pop off; PETG/TPU lean the other way.
 """
 
 MATERIALS = {
     "PLA": dict(
-        preset="Bambu PLA Basic @BBL X1C", z_gap=0.20, iface=2, iface_space=0.5,
-        cooling="max", always_brim=False, brim_min=3, warp=0,
-        cautions=["Easiest case. Watch for heat creep on tiny parts (add a min layer time / slow small layers)."]),
+        preset="Bambu PLA Basic @BBL X1C", always_brim=False, brim_min=3, warp=0,
+        support=dict(top_gap_layers=1, bottom_gap=0.20, iface_top=3, iface_bottom=2,
+                     iface_spacing=0.20, xy=0.35),
+        cautions=["Easiest case. Supports tuned dense-interface + 1-layer gap: smooth underside, still snaps off.",
+                  "Watch heat creep on tiny parts (raise min layer time / slow small layers)."]),
     "PETG": dict(
-        preset="Bambu PETG HF @BBL X1C", z_gap=0.25, iface=1, iface_space=0.8,
-        cooling="medium", always_brim=False, brim_min=4, warp=1,
-        cautions=["PETG fuses to supports - wider Z-gap + sparse interface so they actually come off.",
+        preset="Bambu PETG HF @BBL X1C", always_brim=False, brim_min=4, warp=1,
+        support=dict(top_gap_layers=2, bottom_gap=0.25, iface_top=1, iface_bottom=1,
+                     iface_spacing=0.50, xy=0.40),
+        cautions=["PETG welds to supports - recipe uses a 2-layer gap + sparse interface so they actually pop off.",
                   "Prone to stringing: keep retraction tuned; the preset's defaults are a good start."]),
     "ABS": dict(
-        preset="Bambu ABS @BBL X1C", z_gap=0.20, iface=2, iface_space=0.5,
-        cooling="low", always_brim=True, brim_min=5, warp=3,
+        preset="Bambu ABS @BBL X1C", always_brim=True, brim_min=5, warp=3,
+        support=dict(top_gap_layers=1, bottom_gap=0.20, iface_top=2, iface_bottom=2,
+                     iface_spacing=0.30, xy=0.35),
         cautions=["Warps hard: enclosure closed, minimal cooling, always a brim; draft shield if tall.",
-                  "Keep chamber warm - don't crack the door mid-print."]),
+                  "Keep the chamber warm - don't crack the door mid-print."]),
     "ASA": dict(
-        preset="Generic ASA @BBL X1C", z_gap=0.20, iface=2, iface_space=0.5,
-        cooling="low", always_brim=True, brim_min=5, warp=3,
+        preset="Bambu ASA @BBL X1C", always_brim=True, brim_min=5, warp=3,
+        support=dict(top_gap_layers=1, bottom_gap=0.20, iface_top=2, iface_bottom=2,
+                     iface_spacing=0.30, xy=0.35),
         cautions=["Same warp discipline as ABS; UV-stable so it's the better outdoor choice.",
                   "Low cooling; brim mandatory; watch first-layer adhesion on the smooth plate."]),
     "TPU": dict(
-        preset="Bambu TPU 95A @BBL X1C", z_gap=0.30, iface=0, iface_space=1.0,
-        cooling="medium", always_brim=False, brim_min=4, warp=0,
+        preset="Bambu TPU 95A @BBL X1C", always_brim=False, brim_min=4, warp=0,
+        support=dict(top_gap_layers=2, bottom_gap=0.30, iface_top=1, iface_bottom=1,
+                     iface_spacing=0.60, xy=0.45),
         cautions=["Print SLOW (walls ~15-25 mm/s) and minimize retraction or it'll jam/ooze.",
-                  "Supports on TPU are miserable to remove - avoid needing them; reorient first.",
-                  "Use the AMS with caution (soft filament); a spool holder / external feed is safer."]),
+                  "Supports on flexible TPU are miserable even tuned - reorient to avoid needing them.",
+                  "Feed soft filament carefully (external spool safer than deep AMS routing)."]),
     "CF": dict(
-        preset="Bambu PLA-CF @BBL X1C", z_gap=0.20, iface=1, iface_space=0.6,
-        cooling="max", always_brim=False, brim_min=3, warp=1,
+        preset="Bambu PLA-CF @BBL X1C", always_brim=False, brim_min=3, warp=1,
+        support=dict(top_gap_layers=1, bottom_gap=0.20, iface_top=2, iface_bottom=1,
+                     iface_spacing=0.25, xy=0.40),
         cautions=["Abrasive: REQUIRES a hardened nozzle. Confirm the X1C has one before running CF.",
-                  "CF blends are stiff/brittle - fewer walls needed for stiffness, but avoid sharp stress risers.",
+                  "CF blends are stiff/brittle - avoid sharp stress risers; supports snap off cleanly (brittle).",
                   "PA-CF/PET-CF variants want a dry filament + hotter chamber; swap the preset if not PLA-CF."]),
 }
 
-# Mechanical character, used by the --strength logic.
-#   stiffness = resists bending/holds shape (rigidity)
-#   toughness = absorbs impact / bends before breaking (ductility)
-# both 0-3. `note` is surfaced when strength is functional or higher.
+# stiffness (rigidity) and toughness (impact/ductility), 0-3, + a note
 STRENGTH_TRAITS = {
     "PLA":  dict(stiffness=3, toughness=0,
                  note="Stiff but brittle: superb rigidity + dimensional accuracy, poor impact. Snaps rather than bends."),

@@ -1,0 +1,7 @@
+numpy
+trimesh
+networkx
+lxml
+cascadio
+paho-mqtt
+certifi

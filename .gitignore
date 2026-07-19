@@ -1,0 +1,18 @@
+# python
+venv/
+__pycache__/
+*.pyc
+
+# personal / machine-specific (never publish)
+uid.txt
+ntfy_topic.txt
+defaults.json
+sliced/
+*.gcode
+*.stl
+
+# the compiled Dock app (build it from droplet.applescript instead)
+Optimize for X1C.app/
+
+# local publish helper (not part of the tool)
+publish.sh

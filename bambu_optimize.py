@@ -382,7 +382,7 @@ def orca_flatten(kind, leaf):
         merged.update({k: v for k, v in d.items() if k != "inherits"})
     return merged
 
-def orca_slice(mesh, ov, mat_key, quality, outdir, apply_cal=True):
+def orca_slice(mesh, ov, mat_key, quality, outdir, apply_cal=True, nozzle="0.4"):
     """Slice headlessly with OrcaSlicer. Returns {gcode, time, cm3, grams} or None.
     apply_cal=False skips stored spool calibration (used by the calibration tool
     itself, which needs a raw baseline)."""
@@ -394,9 +394,10 @@ def orca_slice(mesh, ov, mat_key, quality, outdir, apply_cal=True):
     m.apply_translation([128 - c[0], 128 - c[1], 0])   # center on the 256mm plate
     stl = os.path.join(outdir, "part.stl"); m.export(stl)
 
-    mach = orca_flatten("machine", "Bambu Lab X1 Carbon 0.4 nozzle")   # keep its real name
+    mach = orca_flatten("machine", f"Bambu Lab X1 Carbon {nozzle} nozzle")   # keep its real name
     mfile = os.path.join(outdir, "orca_machine.json"); json.dump(mach, open(mfile, "w"))
-    proc = orca_flatten("process", f"{quality}mm Standard @BBL X1C")
+    nzsuf = "" if nozzle == "0.4" else f" {nozzle} nozzle"
+    proc = orca_flatten("process", f"{quality}mm Standard @BBL X1C{nzsuf}")
     proc.update(ov); proc["name"] = f"auto_{mat_key}"; proc["from"] = "User"
     pfile = os.path.join(outdir, "orca_process.json"); json.dump(proc, open(pfile, "w"))
 
@@ -481,6 +482,8 @@ def main():
     ap.add_argument("--quality", default="0.20")
     ap.add_argument("--infill", type=int, default=None,
                     help="override the strength-derived infill %%")
+    ap.add_argument("--nozzle", choices=["0.2", "0.4", "0.6", "0.8"], default="0.4",
+                    help="installed nozzle — picks the matching machine/process presets")
     ap.add_argument("--supports", choices=["auto", "off", "on"], default="auto",
                     help="override the geometry-based support decision")
     ap.add_argument("--no-slice", action="store_true",
@@ -531,7 +534,7 @@ def main():
     # --- auto-slice with OrcaSlicer: real time/filament estimate + printable gcode ---
     if not args.no_slice:
         print("\n  SLICING with OrcaSlicer ...")
-        est = orca_slice(mesh, ov, mat, args.quality, outdir)
+        est = orca_slice(mesh, ov, mat, args.quality, outdir, nozzle=args.nozzle)
         if est:
             dest_dir = os.path.expanduser("~/bambu-tools/sliced")
             os.makedirs(dest_dir, exist_ok=True)
@@ -543,7 +546,7 @@ def main():
         else:
             print("   (OrcaSlicer unavailable or slice failed; settings above still stand)")
 
-    base_process_name = f"{args.quality}mm Standard @BBL X1C"
+    base_process_name = f"{args.quality}mm Standard @BBL X1C" + ("" if args.nozzle == "0.4" else f" {args.nozzle} nozzle")
 
     # also drop a matching Studio preset in, for anyone who wants to tweak in the GUI
     preset_name = f"X1C {name} {mat} {strength}"

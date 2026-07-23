@@ -135,3 +135,42 @@ and subscribe to that topic in the free [ntfy](https://ntfy.sh) phone app.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+## What's new (2026-07)
+
+**`bambu-print` — send a slice to the printer from anywhere** (cloud MQTT):
+
+```bash
+./bambu-print "sliced/part PETG functional.gcode"        # stage: wrap + upload + preflight
+./bambu-print "sliced/part PETG functional.gcode" --go   # start the print
+```
+
+It wraps the raw G-code into a Bambu `.gcode.3mf`, uploads it to a public
+Supabase bucket (set `BAMBU_UPLOAD_SUPABASE_URL` + `BAMBU_UPLOAD_SUPABASE_KEY`
+to any Supabase project you own), preflights printer state over MQTT (refuses
+while a job is running; warns after FINISH that the plate may not be clear),
+then publishes the print command and tails status until the job starts.
+
+> **Honest limitation:** current X1 firmware only accepts print-start commands
+> cryptographically signed by official Bambu apps. `bambu-print` does everything
+> up to that gate, detects the rejection (`mqtt message verify failed`), and
+> tells you to press Send in Bambu Studio — or enable LAN/Developer mode and
+> send from the printer's LAN, where no signature is required. Monitoring
+> (`bambu-status`, `bambu-watch`) is unaffected.
+
+**New slicer flags:**
+
+- `--nozzle 0.2|0.4|0.6|0.8` — picks the matching machine + process presets.
+- `--supports auto|off|on` — override the geometry-based support decision
+  (parts with deliberate short bridges — snap windows, vents — print cleaner
+  unsupported, and supports jammed inside a snap window ruin the fit).
+
+**New material: `PA6-CF`** (aliases `pa6`, `nylon`) — correct Bambu/Orca
+presets, density, and the nylon realities in the cautions (DRY the filament,
+textured plate + glue, full cooldown before removal, optional anneal).
+
+**Fixes:** sub-millimeter ceilings (debossed logos/engraving) no longer
+trigger supports — they bridge themselves in one layer; previously the
+analyzer would plan supports *inside the lettering*.

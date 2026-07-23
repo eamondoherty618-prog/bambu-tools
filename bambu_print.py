@@ -58,15 +58,28 @@ def wrap_3mf(gcode_path, out_path):
 
 
 def supabase_creds():
+    # Portable config: point these at ANY Supabase project's storage — the
+    # printer just needs a public URL it can stream the 3mf from.
+    env_url = os.environ.get("BAMBU_UPLOAD_SUPABASE_URL")
+    env_key = os.environ.get("BAMBU_UPLOAD_SUPABASE_KEY")
+    if env_url and env_key:
+        return env_url.rstrip("/"), env_key
+
+    # Fallback (author's machine): read the same project the fleet app uses.
     url = None
-    for line in open(os.path.join(FRONTEND, ".env.local")):
-        if line.startswith("NEXT_PUBLIC_SUPABASE_URL="):
-            url = line.split("=", 1)[1].strip()
+    try:
+        for line in open(os.path.join(FRONTEND, ".env.local")):
+            if line.startswith("NEXT_PUBLIC_SUPABASE_URL="):
+                url = line.split("=", 1)[1].strip()
+    except OSError:
+        url = None
     key = subprocess.run(
         ["bash", "-lc", f"source ~/.nvm/nvm.sh >/dev/null 2>&1; cd '{FRONTEND}' && netlify env:get SUPABASE_SERVICE_ROLE_KEY 2>/dev/null | tail -1"],
         capture_output=True, text=True).stdout.strip()
     if not url or not key or " " in key or len(key) < 20:
-        sys.exit("Couldn't resolve Supabase URL/service key (needs ~/123-mobile-track/frontend + netlify CLI).")
+        sys.exit("No upload host configured. Set BAMBU_UPLOAD_SUPABASE_URL and "
+                 "BAMBU_UPLOAD_SUPABASE_KEY (service key) to any Supabase project — "
+                 "bambu-print stores the .gcode.3mf in a public bucket the printer can stream.")
     return url, key
 
 

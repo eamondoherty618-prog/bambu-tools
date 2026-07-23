@@ -103,20 +103,42 @@ def send_print(uid, serial, tok, url3mf, md5, name, use_ams):
         "bed_levelling": True, "flow_cali": True, "vibration_cali": True,
         "layer_inspect": True, "use_ams": bool(use_ams),
     }}
-    done = {"ok": False}
+    done = {"ok": False, "reply": None}
     def on_connect(c, u, f, rc, props=None):
         if getattr(rc, "value", rc) == 0:
+            c.subscribe(f"device/{serial}/report")
             c.publish(f"device/{serial}/request", json.dumps(cmd))
             done["ok"] = True
+    def on_message(c, u, msg):
+        try:
+            d = json.loads(msg.payload.decode(errors="replace"))
+        except Exception:
+            return
+        p = d.get("print", {})
+        # the ack for our command carries the same command name + a result field
+        if p.get("command") == "project_file":
+            done["reply"] = p
     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"bp-{uid}-{int(time.time())}")
     c.username_pw_set(f"u_{uid}", tok)
     c.tls_set(ca_certs=certifi.where(), cert_reqs=ssl.CERT_REQUIRED)
-    c.on_connect = on_connect
+    c.on_connect, c.on_message = on_connect, on_message
     c.connect(BROKER, 8883, 30); c.loop_start()
-    end = time.time() + 15
-    while time.time() < end and not done["ok"]:
+    end = time.time() + 25
+    while time.time() < end and done["reply"] is None:
         time.sleep(0.2)
     c.loop_stop(); c.disconnect()
+    reply = done["reply"]
+    if reply is not None:
+        print(f"printer reply: {json.dumps(reply)[:400]}")
+        if reply.get("result") == "failed":
+            if "verify" in str(reply.get("reason", "")):
+                sys.exit(
+                    "\nREJECTED by firmware: this X1C only accepts print-start commands signed by\n"
+                    "official Bambu clients (Studio/Handy) - third-party cloud MQTT can watch but\n"
+                    "not start jobs. Print this exact file from Bambu Studio instead (File > Open\n"
+                    "the .gcode > Print plate), or enable LAN/Developer mode and send from a\n"
+                    "machine on the printer's LAN.")
+            sys.exit(f"print command failed: {reply.get('reason', 'unknown')}")
     return done["ok"]
 
 

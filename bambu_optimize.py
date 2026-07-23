@@ -77,7 +77,9 @@ def analyze(mesh):
     incl = np.degrees(np.arccos(np.clip(np.abs(nz), 0, 1)))  # 0=flat overhang, 90=vertical wall
     tri_z = mesh.triangles[:, :, 2].min(axis=1)
     on_bed = tri_z < 0.4
-    down = (nz < -0.1) & (~on_bed)
+    # sub-mm ceilings are engraving/deboss pockets (logo text, chamfer relief):
+    # they bridge themselves in one layer and must not trigger supports.
+    down = (nz < -0.1) & (~on_bed) & (tri_z >= 1.0)
     up_flat = (nz > 0.98) & (tri_z > 0.4)     # horizontal top surfaces (ironing candidates)
     a = lambda m: float(area[m].sum())
     return dict(
@@ -96,7 +98,7 @@ def analyze(mesh):
         tallness=ext[2] / max(min(ext[0], ext[1]), 1e-6),
     )
 
-def decide(g, mat_key, strength, layer_h, infill_override=None, fast=False):
+def decide(g, mat_key, strength, layer_h, infill_override=None, fast=False, supports="auto"):
     m = M.MATERIALS[mat_key]
     t = M.STRENGTH_TRAITS[mat_key]
     s = STRENGTH[strength]
@@ -104,6 +106,16 @@ def decide(g, mat_key, strength, layer_h, infill_override=None, fast=False):
     why, ov = [], {}
 
     need = g["steep45"] > 150 or g["flat_ceiling"] > 50
+    # designer override: parts with deliberate short bridges (snap windows,
+    # vents, slot roofs) read as "ceilings" but print clean unsupported - and
+    # supports jammed inside a snap window are worse than none.
+    if supports == "off":
+        if need:
+            why.append(f'--supports off: {g["steep45"]:.0f} mm2 of sub-45 ceilings/overhangs '
+                       'treated as deliberate short bridges - printing unsupported.')
+        need = False
+    elif supports == "on":
+        need = True
     if need:
         clean_ceilings = g["flat_ceiling"] > 300 or g["flat_ceiling"] > 0.12 * g["surface"]
         # tree hugs organic/curved parts and clears easily; normal + solid interface
@@ -346,8 +358,9 @@ ORCA_PROFILES = "/Applications/OrcaSlicer.app/Contents/Resources/profiles/BBL"
 # material -> OrcaSlicer filament preset (Orca's names differ slightly from Studio's)
 ORCA_FILAMENT = {"PLA": "Bambu PLA Basic @BBL X1C", "PETG": "Bambu PETG HF @BBL X1C",
                  "ABS": "Bambu ABS @BBL X1C", "ASA": "Bambu ASA @BBL X1C",
-                 "TPU": "Bambu TPU 95A @BBL X1C", "CF": "Bambu PLA-CF @BBL X1C"}
-DENSITY = {"PLA": 1.24, "PETG": 1.27, "ABS": 1.04, "ASA": 1.07, "TPU": 1.21, "CF": 1.30}  # g/cm3
+                 "TPU": "Bambu TPU 95A @BBL X1C", "CF": "Bambu PLA-CF @BBL X1C",
+                 "PA6-CF": "Bambu PA6-CF @BBL X1C"}
+DENSITY = {"PLA": 1.24, "PETG": 1.27, "ABS": 1.04, "ASA": 1.07, "TPU": 1.21, "CF": 1.30, "PA6-CF": 1.19}  # g/cm3
 
 def orca_flatten(kind, leaf):
     """Merge a preset's whole inherits chain into one self-contained dict.
@@ -412,7 +425,8 @@ def orca_slice(mesh, ov, mat_key, quality, outdir, apply_cal=True):
             return None
     out = os.path.join(outdir, "orca_out"); os.makedirs(out, exist_ok=True)
     guarded([ORCA, stl, "--load-settings", f"{mfile};{pfile}", "--load-filaments", fil,
-             "--slice", "0", "--arrange", "1", "--outputdir", out], 300)
+             "--slice", "0", "--arrange", "1", "--outputdir", out,
+             "--export-3mf", os.path.join(out, "plate.gcode.3mf")], 300)
     gc = glob.glob(out + "/*.gcode")
     if not gc:
         return None
@@ -467,6 +481,8 @@ def main():
     ap.add_argument("--quality", default="0.20")
     ap.add_argument("--infill", type=int, default=None,
                     help="override the strength-derived infill %%")
+    ap.add_argument("--supports", choices=["auto", "off", "on"], default="auto",
+                    help="override the geometry-based support decision")
     ap.add_argument("--no-slice", action="store_true",
                     help="skip auto-slicing with OrcaSlicer (just recommend settings)")
     ap.add_argument("--fast", action="store_true",
@@ -494,7 +510,7 @@ def main():
 
     mesh = load_mesh(args.part)
     g = analyze(mesh)
-    ov, why, mrule = decide(g, mat, strength, float(args.quality), args.infill, args.fast)
+    ov, why, mrule = decide(g, mat, strength, float(args.quality), args.infill, args.fast, supports=args.supports)
 
     print(f"\n=== {os.path.basename(args.part)}  |  material: {mat}  |  strength: {strength} ===")
     print(f"  size {g['x']:.1f} x {g['y']:.1f} x {g['z']:.1f} mm | {g['volume']:.1f} cm3 | "

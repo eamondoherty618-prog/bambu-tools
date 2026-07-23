@@ -65,6 +65,16 @@ MATERIALS = {
         cautions=["Abrasive: REQUIRES a hardened nozzle. Confirm the X1C has one before running CF.",
                   "CF blends are stiff/brittle - avoid sharp stress risers; supports snap off cleanly (brittle).",
                   "PA-CF/PET-CF variants want a dry filament + hotter chamber; swap the preset if not PLA-CF."]),
+    "PA6-CF": dict(
+        preset="Bambu PA6-CF @BBL X1C", always_brim=True, brim_min=5, warp=2,
+        support=dict(top_gap_layers=1, bottom_gap=0.20, iface_top=2, iface_bottom=1,
+                     iface_spacing=0.25, xy=0.40),
+        cautions=["DRY THE FILAMENT - PA6 is the most hygroscopic thing you can feed the X1C. 8-12h at 80C "
+                  "(or print straight from a dryer); wet PA6-CF prints foamy, weak, and strings badly.",
+                  "Abrasive: hardened nozzle + hardened extruder required (stock on X1C).",
+                  "Textured PEI plate + glue stick; keep the door closed and lid on - it wants a hot chamber.",
+                  "Wait for FULL cooldown before popping the part - nylon releases on its own when cold.",
+                  "Annealing (80C oven, 4-6h) noticeably boosts strength/HDT if the part runs hot."]),
 }
 
 # stiffness (rigidity) and toughness (impact/ductility), 0-3, + a note
@@ -81,15 +91,19 @@ STRENGTH_TRAITS = {
                  note="Flexible: 'strength' means tear resistance / durometer, not rigidity. Rigid infill does little; walls drive tear strength."),
     "CF":   dict(stiffness=3, toughness=0,
                  note="Very stiff + light but brittle and notch-sensitive. Great for rigidity, poor for impact; fewer walls already carry the load."),
+    "PA6-CF": dict(stiffness=3, toughness=2,
+                 note="The engineering pick: CF stiffness AND nylon toughness, ~180C HDT. Moisture is the real enemy - strength claims assume dry filament."),
 }
 
 # first-layer squish compensation (elephant's foot), mm, per material
-ELEPHANT_FOOT = {"PLA": 0.15, "PETG": 0.20, "ABS": 0.15, "ASA": 0.15, "TPU": 0.10, "CF": 0.15}
+ELEPHANT_FOOT = {"PLA": 0.15, "PETG": 0.20, "ABS": 0.15, "ASA": 0.15, "TPU": 0.10, "CF": 0.15,
+                 "PA6-CF": 0.15}
 
 ALIASES = {
     "pla": "PLA", "petg": "PETG", "pet-g": "PETG", "abs": "ABS", "asa": "ASA",
     "tpu": "TPU", "flex": "TPU", "cf": "CF", "carbon": "CF", "pla-cf": "CF",
     "pa-cf": "CF", "pet-cf": "CF", "pahtcf": "CF",
+    "pa6-cf": "PA6-CF", "pa6cf": "PA6-CF", "pa6": "PA6-CF", "nylon-cf": "PA6-CF", "nylon": "PA6-CF",
 }
 
 def resolve(name: str) -> str:

@@ -19,3 +19,6 @@ publish.sh
 
 # per-spool calibration (personal)
 calibration.json
+
+# OrcaSlicer CLI scratch log
+00000.log

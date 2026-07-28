@@ -14,7 +14,7 @@ What it does:
   5. Prints the exact Bambu Studio headless-slice command; with --slice, runs it and
      reports the time/filament estimate.
 """
-import argparse, glob, json, os, shutil, subprocess, sys, tempfile, time, uuid
+import argparse, glob, json, os, re, shutil, subprocess, sys, tempfile, time, uuid
 import numpy as np, trimesh
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import materials as M
@@ -155,7 +155,8 @@ def decide(g, mat_key, strength, layer_h, infill_override=None, fast=False, supp
 
     small_foot = g["bed_contact"] < 250
     tall = g["tallness"] > 3
-    brim = m["always_brim"] or small_foot or tall or (mat_key in ("PETG", "CF") and g["bed_contact"] < 500)
+    brim = m["always_brim"] or small_foot or tall or (
+        mat_key in ("PETG", "PETG-CF", "PLA-CF") and g["bed_contact"] < 500)
     if brim:
         w = m["brim_min"] + (2 if (tall or m["warp"] >= 3) else 0)
         ov.update({"brim_type": "outer_only", "brim_width": str(w)})
@@ -177,9 +178,10 @@ def decide(g, mat_key, strength, layer_h, infill_override=None, fast=False, supp
         infill = max(infill - 5, 10)
         why.append(f'{mat_key} is tough/ductile -> {infill}% infill carries the load a stiffer, more '
                    f'brittle resin would need more of.')
-    if mat_key == "CF" and s["level"] >= 3:
+    if mat_key in ("PLA-CF", "PETG-CF") and s["level"] >= 3:
         walls = max(walls - 1, 2)
-        why.append('CF is very stiff -> one fewer wall still carries it (and saves abrasive-nozzle time).')
+        why.append(f'{mat_key} is very stiff -> one fewer wall still carries it '
+                   '(and saves abrasive-nozzle wear).')
     if mat_key == "TPU":
         infill, pattern = min(infill, 20), "gyroid"
         why.append('TPU: infill capped + gyroid - rigid infill does little for a flexible part; '
@@ -194,7 +196,7 @@ def decide(g, mat_key, strength, layer_h, infill_override=None, fast=False, supp
 
     if s["level"] >= 3 and t["toughness"] <= 1 and t["stiffness"] >= 2:
         why.append(f'! {mat_key}: {t["note"]} Fine for static/stiffness loads; for impact or snap-risk '
-                   f'parts prefer PETG/ABS/PA-CF.')
+                   f'parts prefer PETG or ABS.')
     if s["level"] >= 3:
         why.append('! Anisotropy: FDM is ~40-50% weaker between layers (Z) than within them. Orient the '
                    'part so the main load runs in-plane (X/Y), not across layers, and avoid tall thin necks. '
@@ -278,7 +280,17 @@ def install_preset(base_process_name, overrides, preset_name):
     dpath, uid = studio_user_process_dir()
     if not dpath:
         return None
-    version, base_id = "2.5.0.14", "GP004"          # sane fallbacks
+    version, base_id = "2.5.0.14", None
+    # the correct base_id is the system preset's own setting_id (GP004 is the
+    # 0.20mm/0.4-nozzle one and is wrong for any other base)
+    for sp in glob.glob(f"{PROFILES}/process/*.json"):
+        try:
+            sd = json.load(open(sp, encoding="utf-8"))
+        except Exception:
+            continue
+        if sd.get("name") == base_process_name and sd.get("setting_id"):
+            base_id = sd["setting_id"]; break
+    base_id = base_id or "GP004"
     for j in glob.glob(dpath + "/*.json"):           # copy from a sibling on the same base
         try:
             d = json.load(open(j, encoding="utf-8"))
@@ -333,7 +345,13 @@ def ask(label, options, default=None):
     print(f"\n{label}")
     for i, o in enumerate(options, 1):
         print(f"  {i}) {o}" + ("   <- Enter for this (last used)" if o == default else ""))
-    raw = input("  choose a number (or Enter): ").strip()
+    try:
+        raw = input("  choose a number (or Enter): ").strip()
+    except EOFError:                      # non-interactive (script/pipe): take the default
+        if default:
+            print(f"  (no input; using {default})")
+            return default
+        sys.exit(f"'{label}' needs a value - pass it as a flag when running non-interactively.")
     if not raw and default:
         return default
     if raw.isdigit() and 1 <= int(raw) <= len(options):
@@ -358,9 +376,34 @@ ORCA_PROFILES = "/Applications/OrcaSlicer.app/Contents/Resources/profiles/BBL"
 # material -> OrcaSlicer filament preset (Orca's names differ slightly from Studio's)
 ORCA_FILAMENT = {"PLA": "Bambu PLA Basic @BBL X1C", "PETG": "Bambu PETG HF @BBL X1C",
                  "ABS": "Bambu ABS @BBL X1C", "ASA": "Bambu ASA @BBL X1C",
-                 "TPU": "Bambu TPU 95A @BBL X1C", "CF": "Bambu PLA-CF @BBL X1C",
-                 "PA6-CF": "Bambu PA6-CF @BBL X1C"}
-DENSITY = {"PLA": 1.24, "PETG": 1.27, "ABS": 1.04, "ASA": 1.07, "TPU": 1.21, "CF": 1.30, "PA6-CF": 1.19}  # g/cm3
+                 "TPU": "Bambu TPU 95A @BBL X1C", "PLA-CF": "Bambu PLA-CF @BBL X1C",
+                 "PETG-CF": "Bambu PETG-CF @BBL X1C"}
+DENSITY = {"PLA": 1.24, "PETG": 1.27, "ABS": 1.04, "ASA": 1.07, "TPU": 1.21,
+           "PLA-CF": 1.30, "PETG-CF": 1.25}  # g/cm3
+
+# The printer runs a 0.6mm HARDENED (HX01) nozzle - confirmed over cloud MQTT.
+# Machine/process/filament are ALL pinned explicitly in the CLI call so nothing
+# is ever inherited from GUI state.
+DEFAULT_NOZZLE = "0.6"
+DEFAULT_LAYER = {"0.2": "0.10", "0.4": "0.20", "0.6": "0.18", "0.8": "0.32"}
+
+def nozzle_layers(nozzle):
+    """Layer heights that actually have a stock 'Standard' process for this
+    nozzle - read off disk, because the naming is not uniform (0.4 presets carry
+    no nozzle suffix, and non-Standard tiers are named Fine/Draft/etc)."""
+    suffix = "" if nozzle == "0.4" else f" {nozzle} nozzle"
+    pat = re.compile(r"^(\d\.\d+)mm Standard @BBL X1C" + re.escape(suffix) + r"\.json$")
+    out = sorted({m.group(1) for f in glob.glob(f"{ORCA_PROFILES}/process/*.json")
+                  if (m := pat.match(os.path.basename(f)))})
+    return out
+
+def machine_preset(nozzle):
+    return f"Bambu Lab X1 Carbon {nozzle} nozzle"
+
+def process_preset(nozzle, layer):
+    """Stock process preset name; the 0.4 presets carry no nozzle suffix."""
+    base = f"{layer}mm Standard @BBL X1C"
+    return base if nozzle == "0.4" else f"{base} {nozzle} nozzle"
 
 def orca_flatten(kind, leaf):
     """Merge a preset's whole inherits chain into one self-contained dict.
@@ -382,23 +425,40 @@ def orca_flatten(kind, leaf):
         merged.update({k: v for k, v in d.items() if k != "inherits"})
     return merged
 
-def orca_slice(mesh, ov, mat_key, quality, outdir, apply_cal=True, nozzle="0.4"):
-    """Slice headlessly with OrcaSlicer. Returns {gcode, time, cm3, grams} or None.
-    apply_cal=False skips stored spool calibration (used by the calibration tool
-    itself, which needs a raw baseline)."""
+def orca_slice(mesh, ov, mat_key, quality, outdir, apply_cal=True, nozzle=DEFAULT_NOZZLE):
+    """Slice headlessly with OrcaSlicer, with machine/process/filament ALL pinned
+    explicitly (nothing inherited from GUI state). Returns
+    {gcode, time, cm3, grams, profiles} or None.
+    apply_cal=False skips stored spool calibration (the calibration tool needs a
+    raw baseline)."""
     if not os.path.exists(ORCA):
         return None
+    mrule = M.MATERIALS[mat_key]
     m = mesh.copy()
     m.apply_translation(-m.bounds[0])            # sit on bed
     c = m.bounds.mean(axis=0)
     m.apply_translation([128 - c[0], 128 - c[1], 0])   # center on the 256mm plate
     stl = os.path.join(outdir, "part.stl"); m.export(stl)
 
-    mach = orca_flatten("machine", f"Bambu Lab X1 Carbon {nozzle} nozzle")   # keep its real name
+    mach_name = machine_preset(nozzle)
+    mach = orca_flatten("machine", mach_name)     # flatten: Orca CLI won't resolve
+    if not mach:                                  # machine inheritance (bed size!)
+        return None
     mfile = os.path.join(outdir, "orca_machine.json"); json.dump(mach, open(mfile, "w"))
-    nzsuf = "" if nozzle == "0.4" else f" {nozzle} nozzle"
-    proc = orca_flatten("process", f"{quality}mm Standard @BBL X1C{nzsuf}")
-    proc.update(ov); proc["name"] = f"auto_{mat_key}"; proc["from"] = "User"
+
+    proc_name = process_preset(nozzle, quality)
+    proc = orca_flatten("process", proc_name)
+    if not proc:
+        return None
+    proc.update(ov)
+    # pin the plate the printer actually has, so bed temps come from the right
+    # plate profile (a plate/temp mismatch is what failed the layer-13 print)
+    proc["curr_bed_type"] = mrule.get("plate", M.DEFAULT_PLATE)
+    if mrule.get("first_layer"):                  # conservative first layer for CF blends
+        fl = str(mrule["first_layer"])
+        proc["initial_layer_speed"] = fl
+        proc["initial_layer_infill_speed"] = fl
+    proc["name"] = f"auto_{mat_key}"; proc["from"] = "User"
     pfile = os.path.join(outdir, "orca_process.json"); json.dump(proc, open(pfile, "w"))
 
     # filament: apply any measured spool calibration (flow ratio / temperature)
@@ -408,22 +468,14 @@ def orca_slice(mesh, ov, mat_key, quality, outdir, apply_cal=True, nozzle="0.4")
         fr = f'{cal["flow_ratio"]:.3f}'; fil_over["filament_flow_ratio"] = [fr, fr]
     if "nozzle_temperature" in cal:
         tt = str(int(cal["nozzle_temperature"])); fil_over["nozzle_temperature"] = [tt, tt]
-    stock_fil = f"{ORCA_PROFILES}/filament/{ORCA_FILAMENT[mat_key]}.json"
-    if fil_over:
-        # inherit the stock preset (Orca resolves filament inheritance, and this
-        # keeps per-plate compatibility) and just layer the calibration on top
-        base = json.load(open(stock_fil, encoding="utf-8"))
-        fild = {"type": "filament", "from": "User", "name": f"cal_{mat_key}",
-                "inherits": ORCA_FILAMENT[mat_key]}
-        for k in ("compatible_printers", "compatible_printers_condition", "version"):
-            if base.get(k):
-                fild[k] = base[k]
-        fild.update(fil_over)
-        fil = os.path.join(outdir, "orca_filament.json"); json.dump(fild, open(fil, "w"))
-    else:
-        fil = stock_fil
-        if not os.path.exists(fil):
-            return None
+    # Flatten the filament too: an inherits-based override leaves the plate temps
+    # unresolved (textured PEI came out 45 C instead of the profile's 70 C).
+    fil_name = ORCA_FILAMENT[mat_key]
+    fild = orca_flatten("filament", fil_name)
+    if not fild:
+        return None
+    fild.update(fil_over)
+    fil = os.path.join(outdir, "orca_filament.json"); json.dump(fild, open(fil, "w"))
     out = os.path.join(outdir, "orca_out"); os.makedirs(out, exist_ok=True)
     guarded([ORCA, stl, "--load-settings", f"{mfile};{pfile}", "--load-filaments", fil,
              "--slice", "0", "--arrange", "1", "--outputdir", out,
@@ -437,7 +489,9 @@ def orca_slice(mesh, ov, mat_key, quality, outdir, apply_cal=True, nozzle="0.4")
     cm3 = re.search(r'filament used \[cm3\]\s*=\s*([\d.]+)', txt)
     vol = float(cm3.group(1)) if cm3 else 0.0
     return {"gcode": gc[0], "time": (tm.group(1).strip() if tm else "?"),
-            "cm3": vol, "grams": vol * DENSITY.get(mat_key, 1.24)}
+            "cm3": vol, "grams": vol * DENSITY.get(mat_key, 1.24),
+            "profiles": {"machine": mach_name, "process": proc_name, "filament": fil_name,
+                         "plate": proc["curr_bed_type"], "nozzle": nozzle}}
 
 def write_machine_override(base_machine, part, outdir):
     """User machine that inherits the stock X1C and adds the multi-extruder
@@ -479,11 +533,17 @@ def main():
     ap.add_argument("--material", default=None)
     ap.add_argument("--strength", default=None,
                     help="cosmetic | standard | functional | high | max  (or 1-5)")
-    ap.add_argument("--quality", default="0.20")
+    ap.add_argument("--quality", default=None,
+                    help="layer height; defaults to the nozzle's stock height "
+                         "(0.6 -> 0.18, 0.4 -> 0.20)")
     ap.add_argument("--infill", type=int, default=None,
                     help="override the strength-derived infill %%")
-    ap.add_argument("--nozzle", choices=["0.2", "0.4", "0.6", "0.8"], default="0.4",
-                    help="installed nozzle — picks the matching machine/process presets")
+    ap.add_argument("--nozzle", choices=["0.2", "0.4", "0.6", "0.8"], default=DEFAULT_NOZZLE,
+                    help="installed nozzle - picks the matching machine/process presets")
+    ap.add_argument("--no-preflight", action="store_true",
+                    help="skip verifying the printer's loaded spool/nozzle over cloud MQTT")
+    ap.add_argument("--serial", default=None,
+                    help="preflight a specific printer by serial (or its last digits)")
     ap.add_argument("--supports", choices=["auto", "off", "on"], default="auto",
                     help="override the geometry-based support decision")
     ap.add_argument("--no-slice", action="store_true",
@@ -496,6 +556,16 @@ def main():
                     help="after installing, (re)launch Bambu Studio with the part open")
     ap.add_argument("--outdir", default=None)
     args = ap.parse_args()
+
+    # layer height must exist for the installed nozzle
+    if not args.quality:
+        avail0 = nozzle_layers(args.nozzle)
+        pref = DEFAULT_LAYER.get(args.nozzle)
+        args.quality = pref if pref in avail0 else (avail0[0] if avail0 else "0.20")
+    avail = nozzle_layers(args.nozzle)
+    if avail and args.quality not in avail:
+        sys.exit(f"No stock {args.quality}mm process for a {args.nozzle} nozzle. "
+                 f"Available: {', '.join(avail)}")
 
     # ask for anything not supplied (drag-and-drop launcher relies on this);
     # Enter repeats whatever you picked last time
@@ -524,7 +594,7 @@ def main():
     print("\n  DECISIONS")
     for w in why:
         print(f"   - {w}")
-    print("\n  SETTINGS (process overrides on '0.20mm Standard @BBL X1C'):")
+    print(f"\n  SETTINGS (process overrides on '{process_preset(args.nozzle, args.quality)}'):")
     for k, v in ov.items():
         print(f"     {k:28} = {v}")
     print("\n  MATERIAL CAUTIONS")
@@ -540,13 +610,37 @@ def main():
             os.makedirs(dest_dir, exist_ok=True)
             dest = os.path.join(dest_dir, f"{name} {mat} {strength}.gcode")
             shutil.copy(est["gcode"], dest)
-            print(f'   PRINT TIME : {est["time"]}')
+            pr = est["profiles"]
+            print(f'   PINNED     : {pr["machine"]} | {pr["process"]}')
+            print(f'                {pr["filament"]} | {pr["plate"]}')
+            print(f'   PRINT TIME : {est["time"]}        <- OrcaSlicer\'s own slice report')
             print(f'   FILAMENT   : {est["cm3"]:.1f} cm3  (~{est["grams"]:.0f} g of {mat})')
             print(f'   G-code     : {dest}')
         else:
             print("   (OrcaSlicer unavailable or slice failed; settings above still stand)")
 
-    base_process_name = f"{args.quality}mm Standard @BBL X1C" + ("" if args.nozzle == "0.4" else f" {args.nozzle} nozzle")
+    # --- verify the PRINTER's real state before calling this ready ---
+    preflight_blocked = False
+    if not args.no_slice and not args.no_preflight:
+        print("\n  PREFLIGHT (live printer check)")
+        try:
+            import bambu_preflight as pf
+            st = pf.printer_state(args.serial)
+            problems, notes = pf.check(st, mat, args.nozzle)
+            for n in notes:
+                print(f"   - {n}")
+            for p in problems:
+                print(f"   ! {p}")
+            if problems:
+                print("\n   NOT READY - fix the above, or re-slice to match what's loaded.")
+                preflight_blocked = True
+            else:
+                print("   READY - loaded spool and nozzle match this slice.")
+        except (Exception, SystemExit) as e:
+            print(f"   (couldn't verify the printer: {e})")
+            preflight_blocked = True
+
+    base_process_name = process_preset(args.nozzle, args.quality)
 
     # also drop a matching Studio preset in, for anyone who wants to tweak in the GUI
     preset_name = f"X1C {name} {mat} {strength}"
@@ -555,15 +649,25 @@ def main():
 
     print("\n  TO PRINT")
     if not args.no_slice:
-        print("   Your sliced G-code is ready (path above). Send it to the X1C by dragging")
-        print("   the .gcode into Bambu Studio (or Bambu Handy) and hitting print.")
-        print(f'   To tweak first: open the part in Studio, pick filament "{mrule["preset"]}"')
-        print(f'   and process preset "{preset_name}", then Slice.')
+        print("   Send the G-code above to the printer (Bambu Studio's device/print-file")
+        print("   panel, or Bambu Handy) and press print there. Third-party print-start is")
+        print("   rejected by firmware (err 84033543), so that stays a manual step.")
+        print("   ! Do NOT re-slice this in Studio to 'check' it: Studio re-slices with its")
+        print("     own active profiles and reports a bogus estimate (that's the 42h-for-a-7h")
+        print(f'     part trap). The numbers above come from OrcaSlicer\'s slice report.')
+        print(f'   To change settings, re-run this tool - or in Studio pick filament')
+        print(f'   "{mrule["preset"]}" + process preset "{preset_name}" (set the filament')
+        print("     dropdown by hand; it is canvas-drawn and cannot be automated).")
     else:
         print(f'   Open the part in Bambu Studio, pick filament "{mrule["preset"]}" and process')
         print(f'   preset "{preset_name}", then Slice.')
     if args.open:
         open_in_studio(args.part)
+
+    if preflight_blocked:
+        print("\n  ! PREFLIGHT BLOCKED - the G-code is saved, but the printer does not")
+        print("    currently match this slice. Fix the mismatch (or re-slice) before printing.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

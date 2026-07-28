@@ -2,6 +2,13 @@
 """
 bambu-print: send a sliced .gcode to the X1C over Bambu cloud, from anywhere.
 
+!! NON-FUNCTIONAL FOR STARTING PRINTS (field-verified). Current X1C firmware
+   rejects a third-party print-start on BOTH LAN and cloud with
+   err 84033543 "mqtt message verify failed" - commands must be signed by
+   Bambu Connect. `--go` will upload and then fail at the start command.
+   Use it only to stage/upload; press print in Bambu Studio or Handy.
+   Kept for reference; see README "Field-tested constraints".
+
     bambu-print sliced/part.gcode           # stage: wrap + upload + preflight
     bambu-print sliced/part.gcode --go      # actually start the print
     bambu-print sliced/part.gcode --go --ams  # feed from AMS (default: external spool)
@@ -19,7 +26,7 @@ What it does:
 
 Physical checklist the tool cannot verify - on you:
   plate clear + correct plate in + glue if nylon + the right filament
-  loaded (and DRY for PA6/PAHT).
+  loaded (and DRY for CF/nylon blends).
 """
 import argparse, hashlib, json, os, ssl, subprocess, sys, time, urllib.request, zipfile
 

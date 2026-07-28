@@ -22,3 +22,8 @@ calibration.json
 
 # OrcaSlicer CLI scratch log
 00000.log
+
+# generated icon artifacts (rebuild with make_icon.py)
+icon.png
+AppIcon.icns
+AppIcon.iconset/

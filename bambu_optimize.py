@@ -280,38 +280,57 @@ def install_preset(base_process_name, overrides, preset_name):
     dpath, uid = studio_user_process_dir()
     if not dpath:
         return None
-    version, base_id = "2.5.0.14", None
-    # the correct base_id is the system preset's own setting_id (GP004 is the
-    # 0.20mm/0.4-nozzle one and is wrong for any other base)
+    # Studio's own system profiles are the ONLY authority for base_id/version/
+    # extruder fields. Never copy base_id from a sibling user preset: one bad
+    # install then poisons every later one (a stale GP004 - the 0.20mm/0.4-nozzle
+    # base - filed 0.6-nozzle presets under the wrong base, so Studio hid them).
+    sysidx = {}
     for sp in glob.glob(f"{PROFILES}/process/*.json"):
         try:
             sd = json.load(open(sp, encoding="utf-8"))
         except Exception:
             continue
-        if sd.get("name") == base_process_name and sd.get("setting_id"):
-            base_id = sd["setting_id"]; break
-    base_id = base_id or "GP004"
-    for j in glob.glob(dpath + "/*.json"):           # copy from a sibling on the same base
-        try:
-            d = json.load(open(j, encoding="utf-8"))
-        except Exception:
-            continue
-        if d.get("inherits") == base_process_name:
-            version = d.get("version", version)
-            info = j[:-5] + ".info"
-            if os.path.exists(info):
-                for line in open(info):
-                    if line.strip().startswith("base_id"):
-                        base_id = line.split("=", 1)[1].strip() or base_id
-            break
+        if sd.get("name"):
+            sysidx[sd["name"]] = sd
+
+    def sys_resolve(key, start=base_process_name):
+        """Walk the system preset's inherits chain looking for a key."""
+        name, seen = start, set()
+        while name and name in sysidx and name not in seen:
+            seen.add(name)
+            if key in sysidx[name]:
+                return sysidx[name][key]
+            name = sysidx[name].get("inherits")
+        return None
+
+    base_id = sysidx.get(base_process_name, {}).get("setting_id")
+    if not base_id:
+        return None          # unknown base - a guessed id would just hide the preset
+    version = sys_resolve("version") or "2.5.0.14"
+
     doc = {"type": "process", "from": "User", "name": preset_name,
            "inherits": base_process_name, "print_settings_id": preset_name,
            "version": version}
+    # multi-extruder-era fields Studio's own presets carry; without them Studio
+    # can reject the preset (same class of gap as nozzle_volume_type in the CLI)
+    for k in ("print_extruder_id", "print_extruder_variant"):
+        v = sys_resolve(k)
+        if v is not None:
+            doc[k] = v
     doc.update(overrides)
-    json.dump(doc, open(os.path.join(dpath, preset_name + ".json"), "w"), indent=1)
-    with open(os.path.join(dpath, preset_name + ".info"), "w") as f:
-        f.write(f"sync_info = \nuser_id = {uid}\nsetting_id = PPUS{uuid.uuid4().hex[:16]}\n"
-                f"base_id = {base_id}\nupdated_time = {int(time.time())}\n")
+    # Mirror into every logged-in account folder. Studio shows presets only for the
+    # account it is currently signed into, and which one that is isn't reliably
+    # detectable from disk - writing both costs nothing and avoids an invisible preset.
+    targets = {dpath: uid}
+    for d in glob.glob(STUDIO_USER + "/*/process"):
+        u = os.path.basename(os.path.dirname(d))
+        if u.isdigit():
+            targets.setdefault(d, u)
+    for d, u in targets.items():
+        json.dump(doc, open(os.path.join(d, preset_name + ".json"), "w"), indent=1)
+        with open(os.path.join(d, preset_name + ".info"), "w") as f:
+            f.write(f"sync_info = \nuser_id = {u}\nsetting_id = PPUS{uuid.uuid4().hex[:16]}\n"
+                    f"base_id = {base_id}\nupdated_time = {int(time.time())}\n")
     return dpath
 
 DEFAULTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "defaults.json")

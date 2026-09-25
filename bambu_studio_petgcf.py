@@ -11,6 +11,13 @@ Both presets are plain User presets that *inherit* Bambu's stock ones, so a
 Studio update to the stock profiles flows through; only the overrides below
 are pinned. Re-run any time to re-install (files are overwritten in place).
 
+IMPORTANT: Studio's cloud sync treats the account's cloud preset list as the
+truth and DELETES local user presets the cloud doesn't know about, on every
+launch. So this tool first creates/updates the presets in the cloud through
+the same API Studio uses (POST create / PATCH update, /v1/iot-service/api/slicer/setting, token
+from Studio's cookie jar via bambu_cloud.read_token), then writes the local
+files with the cloud's setting_id. Without the cloud step they vanish.
+
 Why these numbers (Bambu PETG-CF, 0.6 HX01, textured PEI):
   filament  260 C nozzle (stock 255): 0.6 nozzle at 0.24 mm layers pushes
             ~8 mm^3/s; a bit more heat = better layer welding on CF.
@@ -27,9 +34,13 @@ import argparse
 import glob
 import json
 import os
+import ssl
 import subprocess
+import sys
 import time
 import uuid
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 STUDIO = os.path.expanduser("~/Library/Application Support/BambuStudio")
 STUDIO_USER = f"{STUDIO}/user"
@@ -154,13 +165,72 @@ def account_dirs(kind):
     return out
 
 
-def write_preset(kind, doc, base_id, prefix):
+def write_preset(kind, doc, base_id, prefix, cloud_id=None, cloud_uid=None):
     for d, u in account_dirs(kind).items():
+        sid = cloud_id if (cloud_id and u == cloud_uid) else f"{prefix}{uuid.uuid4().hex[:16]}"
         json.dump(doc, open(os.path.join(d, doc["name"] + ".json"), "w"), indent=4)
         with open(os.path.join(d, doc["name"] + ".info"), "w") as f:
-            f.write(f"sync_info = \nuser_id = {u}\nsetting_id = {prefix}{uuid.uuid4().hex[:16]}\n"
+            f.write(f"sync_info = \nuser_id = {u}\nsetting_id = {sid}\n"
                     f"base_id = {base_id}\nupdated_time = {int(time.time())}\n")
-        print(f"  {kind}: {d.split('/user/')[1]}/{doc['name']}.json")
+        print(f"  {kind}: {d.split('/user/')[1]}/{doc['name']}.json  ({sid})")
+
+
+# ---- cloud ---------------------------------------------------------------
+def _ser(v):
+    """Studio's flat config-string form: numeric lists 'a,b', string lists '\"a\";\"b\"'."""
+    if isinstance(v, list):
+        num = all(isinstance(x, str) and (x == "nil" or x.replace(".", "", 1).replace("-", "", 1)
+                                          .replace("%", "", 1).isdigit()) for x in v)
+        return ",".join(v) if num else ";".join('"%s"' % x for x in v)
+    return str(v)
+
+
+def cloud_sync(doc, base_id, typ):
+    """Create or update this preset in the signed-in Bambu account. Returns
+    (setting_id, uid) or (None, None) if the cloud is unreachable."""
+    try:
+        import certifi
+        import urllib.request
+        import bambu_cloud as bc
+        tok = bc.read_token()
+        uid = bc.get_uid()
+    except Exception as e:
+        print(f"! cloud: no Studio login token ({e}); presets will be local-only and Studio\n"
+              "  will delete them on launch. Log in to Studio and re-run.")
+        return None, None
+    ctx = ssl.create_default_context(cafile=certifi.where())
+
+    def call(method, path, body=None):
+        req = urllib.request.Request("https://api.bambulab.com" + path, method=method,
+                                     headers={"Authorization": f"Bearer {tok}", "User-Agent": "BambuStudio",
+                                              "Content-Type": "application/json"},
+                                     data=json.dumps(body).encode() if body is not None else None)
+        try:
+            r = urllib.request.urlopen(req, timeout=20, context=ctx)
+            return r.status, json.load(r)
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode(errors="replace")[:400]
+
+    setting = {k: _ser(v) for k, v in doc.items() if k not in ("type", "from", "name", "version")}
+    setting["updated_time"] = str(int(time.time()))
+    body = {"name": doc["name"], "type": typ, "base_id": base_id, "version": doc["version"], "setting": setting}
+
+    st, lst = call("GET", "/v1/iot-service/api/slicer/setting?version=02.08.02.61")
+    existing = None
+    if st == 200:
+        for s_ in lst.get(typ, {}).get("private", []):
+            if s_.get("name") == doc["name"]:
+                existing = s_["setting_id"]
+    if existing:
+        st, resp = call("PATCH", f"/v1/iot-service/api/slicer/setting/{existing}", body)
+        print(f"  cloud: updated {doc['name']} ({existing}) -> {st}")
+        return (existing if st == 200 else None), uid
+    st, resp = call("POST", "/v1/iot-service/api/slicer/setting", body)
+    if st == 200 and isinstance(resp, dict) and resp.get("setting_id"):
+        print(f"  cloud: created {doc['name']} ({resp['setting_id']})")
+        return resp["setting_id"], uid
+    print(f"! cloud: create failed {st} {resp}")
+    return None, None
 
 
 def build_filament():
@@ -228,6 +298,7 @@ def main():
 
     fil, fil_base_id = build_filament()
     proc, proc_base_id = build_process()
+    print("presets:", fil["name"], "|", proc["name"])
 
     was_running = studio_running()
     clean = quit_studio() if was_running else True
@@ -236,9 +307,12 @@ def main():
               "  quit and reopen Studio yourself to see them. Not touching the selected-preset\n"
               "  config while Studio is open.")
 
+    print("cloud:")
+    fil_id, uid = cloud_sync(fil, fil_base_id, "filament")
+    proc_id, _ = cloud_sync(proc, proc_base_id, "print")
     print("installing:")
-    write_preset("filament", fil, fil_base_id, "PFUS")
-    write_preset("process", proc, proc_base_id, "PPUS")
+    write_preset("filament", fil, fil_base_id, "PFUS", fil_id, uid)
+    write_preset("process", proc, proc_base_id, "PPUS", proc_id, uid)
 
     if clean:
         select_in_conf()

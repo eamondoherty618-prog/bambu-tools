@@ -1,2 +1,2 @@
 #!/bin/bash
-cd "$(dirname "$0")" && exec python3 bambu_studio_petgcf.py "$@"
+cd "$(dirname "$0")" && exec "$PWD/venv/bin/python" bambu_studio_petgcf.py "$@"

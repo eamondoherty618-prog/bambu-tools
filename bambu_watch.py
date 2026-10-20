@@ -43,11 +43,17 @@ def main():
     ap.add_argument("--interval", type=int, default=30)
     ap.add_argument("--forever", action="store_true",
                     help="keep watching for further prints instead of exiting after one")
+    ap.add_argument("--serial", help="which bound printer (serial or its last digits); required if >1 bound")
     args = ap.parse_args()
 
     tok = bambu_cloud.read_token()
     uid = str(bambu_cloud.api("/v1/user-service/my/profile", tok)["uid"])
-    dev = bambu_cloud.api("/v1/iot-service/api/user/bind", tok)["devices"][0]
+    devs = bambu_cloud.api("/v1/iot-service/api/user/bind", tok)["devices"]
+    if args.serial:
+        devs = [d for d in devs if d["dev_id"].endswith(args.serial)]
+    if len(devs) != 1:
+        raise SystemExit(f"{len(devs)} printers match; pass --serial (bound: {[d['dev_id'][-3:] for d in bambu_cloud.api('/v1/iot-service/api/user/bind', tok)['devices']]})")
+    dev = devs[0]
     serial = dev["dev_id"]
     print(f"watching {dev.get('name')} -> phone alerts on ntfy.sh/{args.topic}")
     print("(subscribe in the ntfy app; Ctrl-C to stop)")

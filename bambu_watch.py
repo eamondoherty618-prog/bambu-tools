@@ -29,6 +29,10 @@ def default_topic():
     return "bambu-x1c-please-change-me"
 
 def ntfy(topic, title, msg, priority="default", tags=""):
+    # HTTP headers are latin-1; ntfy accepts RFC 2047 for non-ASCII titles
+    if not title.isascii():
+        import base64
+        title = "=?UTF-8?B?" + base64.b64encode(title.encode()).decode() + "?="
     req = urllib.request.Request(f"https://ntfy.sh/{topic}", data=msg.encode(),
         headers={"Title": title, "Priority": priority, "Tags": tags})
     try:
@@ -43,6 +47,7 @@ def main():
     ap.add_argument("--interval", type=int, default=30)
     ap.add_argument("--forever", action="store_true",
                     help="keep watching for further prints instead of exiting after one")
+    ap.add_argument("--hours", type=float, default=0, help="give up after this many hours (0 = never)")
     ap.add_argument("--serial", help="which bound printer (serial or its last digits); required if >1 bound")
     args = ap.parse_args()
 
@@ -58,7 +63,9 @@ def main():
     print(f"watching {dev.get('name')} -> phone alerts on ntfy.sh/{args.topic}")
     print("(subscribe in the ntfy app; Ctrl-C to stop)")
 
-    last, notified = None, False
+    # a stale FINISH/FAILED from the previous job must not fire: arm only once we see it running
+    last, notified = None, True
+    t0 = time.time()
     while True:
         p = bambu_cloud.status_once(uid, serial, tok)
         state = p.get("gcode_state")
@@ -79,6 +86,8 @@ def main():
             notified = True
             if not args.forever:
                 break
+        if args.hours and time.time() - t0 > args.hours * 3600:
+            print("  timed out waiting."); break
         time.sleep(args.interval)
 
 if __name__ == "__main__":

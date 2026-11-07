@@ -1,2 +1,2 @@
 #!/bin/bash
-exec "$HOME/bambu-tools/venv/bin/python" "$HOME/bambu-tools/bambu_watch.py" "$@"
+exec "$HOME/bambu-tools/venv/bin/python" -u "$HOME/bambu-tools/bambu_watch.py" "$@"

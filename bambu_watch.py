@@ -14,6 +14,7 @@ NOTE: actually *starting* a print from a third-party tool is blocked by Bambu's
 watches + notifies; it can't launch the job.
 """
 import argparse, ssl, time, urllib.request, os, sys
+import certifi
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bambu_cloud
 
@@ -35,11 +36,14 @@ def ntfy(topic, title, msg, priority="default", tags=""):
         title = "=?UTF-8?B?" + base64.b64encode(title.encode()).decode() + "?="
     req = urllib.request.Request(f"https://ntfy.sh/{topic}", data=msg.encode(),
         headers={"Title": title, "Priority": priority, "Tags": tags})
+    # the venv's default SSL context has no CA bundle on this Mac (CERTIFICATE_VERIFY_FAILED), so use
+    # certifi like bambu_cloud does -- without this the 2026-11-07 finish alert was silently lost
+    ctx = ssl.create_default_context(cafile=certifi.where())
     try:
-        urllib.request.urlopen(req, timeout=10)
+        urllib.request.urlopen(req, timeout=10, context=ctx)
         return True
     except Exception as e:
-        print("  ntfy failed:", e); return False
+        print("  ntfy failed:", e, flush=True); return False
 
 def main():
     ap = argparse.ArgumentParser()

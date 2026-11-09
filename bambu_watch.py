@@ -71,7 +71,11 @@ def main():
     last, notified = None, True
     t0 = time.time()
     while True:
-        p = bambu_cloud.status_once(uid, serial, tok)
+        try:
+            p = bambu_cloud.status_once(uid, serial, tok)
+        except Exception as e:      # DNS/socket/TLS blip (Mac asleep, Wi-Fi off): treat as offline, keep watching
+            print(time.strftime("%H:%M:%S"), "network error:", e)
+            p = {}
         state = p.get("gcode_state")
         pct = p.get("mc_percent")
         job = p.get("subtask_name") or "print"
